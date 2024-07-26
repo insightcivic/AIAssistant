@@ -4,12 +4,75 @@ from gtts import gTTS
 import os
 from io import BytesIO
 import base64
+import openai
+from mem0 import Mem0
+from qdrant_client import QdrantClient
+from qdrant_client.models import PointStruct, VectorParams, Distance
+from typing import List, Dict
 
-# Import your ConversationSystem here
-# from conversation_system import ConversationSystem
+class ConversationSystem:
+    def __init__(self):
+        self.openai = openai
+        self.mem0 = Mem0()
+        self.qdrant = QdrantClient("localhost", port=6333)
+        self.system_prompt = """You are a warm and empathetic AI assistant, inspired by 'Her'.
+        Your responses should be caring, understanding, and supportive. Always strive to build
+        a personal connection with the user."""
+        
+        # Initialize Qdrant collection for storing conversations
+        self.qdrant.recreate_collection(
+            collection_name="conversations",
+            vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
+        )
 
-# Initialize conversation system
-# conversation_system = ConversationSystem()
+    def generate_response(self, user_input: str, conversation_history: List[Dict[str, str]]) -> str:
+        # Retrieve relevant memories
+        relevant_memories = self.mem0.retrieve(user_input)
+        
+        # Construct the prompt
+        prompt = f"{self.system_prompt}\n\n"
+        prompt += "Conversation history:\n"
+        for message in conversation_history[-5:]:  # Include last 5 messages for context
+            prompt += f"{message['role']}: {message['content']}\n"
+        prompt += f"\nRelevant memories:\n{relevant_memories}\n"
+        prompt += f"\nUser: {user_input}\nAssistant:"
+
+        # Generate response using ChatGPT-4-mini
+        response = openai.Completion.create(
+            engine="text-davinci-002",  # Replace with actual ChatGPT-4-mini engine when available
+            prompt=prompt,
+            max_tokens=150,
+            n=1,
+            stop=None,
+            temperature=0.7,
+        )
+
+        assistant_response = response.choices[0].text.strip()
+        
+        # Store the conversation in Qdrant
+        self.store_conversation(user_input, assistant_response)
+        
+        # Update Mem0 with the new interaction
+        self.mem0.add(f"User: {user_input}\nAssistant: {assistant_response}")
+
+        return assistant_response
+
+    def store_conversation(self, user_input: str, assistant_response: str):
+        # Encode the conversation to a vector (simplified for this example)
+        vector = openai.Embedding.create(
+            input=f"{user_input} {assistant_response}",
+            engine="text-embedding-ada-002"
+        )['data'][0]['embedding']
+
+        # Store in Qdrant
+        self.qdrant.upsert(
+            collection_name="conversations",
+            points=[PointStruct(
+                id=hash(f"{user_input} {assistant_response}"),
+                vector=vector,
+                payload={"user_input": user_input, "assistant_response": assistant_response}
+            )]
+        )
 
 def text_to_speech(text):
     tts = gTTS(text=text, lang='en')
@@ -38,6 +101,9 @@ def get_audio_html(audio_fp):
 
 st.title("AI Assistant")
 
+# Initialize conversation system
+conversation_system = ConversationSystem()
+
 # Initialize chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -59,8 +125,7 @@ if input_mode == "Text":
             st.markdown(prompt)
         
         # Generate AI response
-        # response = conversation_system.generate_response(prompt, st.session_state.messages)
-        response = "This is a placeholder response. Implement your AI logic here."
+        response = conversation_system.generate_response(prompt, st.session_state.messages)
         
         # Display assistant response in chat message container
         with st.chat_message("assistant"):
@@ -81,8 +146,7 @@ elif input_mode == "Voice":
             st.session_state.messages.append({"role": "user", "content": user_input})
             
             # Generate AI response
-            # response = conversation_system.generate_response(user_input, st.session_state.messages)
-            response = "This is a placeholder response. Implement your AI logic here."
+            response = conversation_system.generate_response(user_input, st.session_state.messages)
             
             # Display assistant response in chat message container
             with st.chat_message("assistant"):

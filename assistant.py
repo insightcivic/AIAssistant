@@ -1,29 +1,53 @@
 import streamlit as st
 import speech_recognition as sr
 from gtts import gTTS
-import os
 from io import BytesIO
 import base64
 import openai
-from mem0 import Mem0
+from mem0 import MemoryClient as Mem0
 from qdrant_client import QdrantClient
-from qdrant_client.models import PointStruct, VectorParams, Distance
+from qdrant_client.http import models
+from qdrant_client.http.models import Distance
 from typing import List, Dict
+from dotenv import load_dotenv
+import os
+
+# Load environment variables
+load_dotenv()
+
+# Initialize OpenAI API
+open_api_key = os.getenv('OPENAI_API_KEY')
+
+# does Mem0 require the api key during initialization?
+mem_0_instance = Mem0(api_key=open_api_key
+
 
 class ConversationSystem:
     def __init__(self):
         self.openai = openai
         self.mem0 = Mem0()
-        self.qdrant = QdrantClient("localhost", port=6333)
+        
+        # Initialize Qdrant client with cloud-hosted instance
+        self.qdrant = QdrantClient(
+            url="https://38a4d8f1-25eb-49df-ae2b-dda85be6c67a.us-east4-0.gcp.cloud.qdrant.io:6333",
+            api_key=os.getenv('QDRANT_API_KEY')
+        )
+        
         self.system_prompt = """You are a warm and empathetic AI assistant, inspired by 'Her'.
         Your responses should be caring, understanding, and supportive. Always strive to build
         a personal connection with the user."""
         
         # Initialize Qdrant collection for storing conversations
-        self.qdrant.recreate_collection(
-            collection_name="conversations",
-            vectors_config=VectorParams(size=1536, distance=Distance.COSINE),
-        )
+        self.init_qdrant_collection()
+
+    def init_qdrant_collection(self):
+        try:
+            self.qdrant.get_collection("conversations")
+        except Exception:
+            self.qdrant.create_collection(
+                collection_name="conversations",
+                vectors_config=models.VectorParams(size=1536, distance=Distance.COSINE),
+            )
 
     def generate_response(self, user_input: str, conversation_history: List[Dict[str, str]]) -> str:
         # Retrieve relevant memories
@@ -39,7 +63,7 @@ class ConversationSystem:
 
         # Generate response using ChatGPT-4-mini
         response = openai.Completion.create(
-            engine="text-davinci-002",  # Replace with actual ChatGPT-4-mini engine when available
+            engine="chatgpt-4o-mini",  # Replace with actual ChatGPT-4-mini engine when available
             prompt=prompt,
             max_tokens=150,
             n=1,
@@ -58,7 +82,7 @@ class ConversationSystem:
         return assistant_response
 
     def store_conversation(self, user_input: str, assistant_response: str):
-        # Encode the conversation to a vector (simplified for this example)
+        # Encode the conversation to a vector
         vector = openai.Embedding.create(
             input=f"{user_input} {assistant_response}",
             engine="text-embedding-ada-002"
@@ -67,7 +91,7 @@ class ConversationSystem:
         # Store in Qdrant
         self.qdrant.upsert(
             collection_name="conversations",
-            points=[PointStruct(
+            points=[models.PointStruct(
                 id=hash(f"{user_input} {assistant_response}"),
                 vector=vector,
                 payload={"user_input": user_input, "assistant_response": assistant_response}

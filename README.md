@@ -5,3 +5,8 @@ AI Assistant
 
 `pip install streamlit gtts SpeechRecognition Pyaudio`
 
+## Running
+
+`stramlit run aiassistant.py`
+
+

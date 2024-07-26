@@ -7,6 +7,6 @@ AI Assistant
 
 ## Running
 
-`stramlit run aiassistant.py`
+`streamlit run aiassistant.py`
 
 
